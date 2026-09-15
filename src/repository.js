@@ -1,59 +1,45 @@
-import { GraphQLError } from 'graphql';
 import { initialCatalog } from './catalog.js';
+import { createUseCases } from './use-cases.js';
+import { STATUSES } from './validators.js';
 
-export const STATUSES = ['PLAN_TO_READ', 'READING', 'ON_HOLD', 'DROPPED', 'COMPLETED'];
+export { STATUSES };
 
-const normalize = (value) => value.trim().toLowerCase();
-
-export const createRepository = (seed = initialCatalog) => {
+// Camada de persistencia: guarda os mangas e nada mais. Nenhuma regra de
+// negocio mora aqui, so o armazenamento em memoria.
+const createStore = (seed) => {
   const mangas = new Map(seed.map((manga) => [manga.id, { ...manga }]));
   let nextId = mangas.size + 1;
 
-  const list = ({ genre, author } = {}) =>
-    [...mangas.values()].filter(
-      (manga) =>
-        (!genre || normalize(manga.genre) === normalize(genre)) &&
-        (!author || normalize(manga.author).includes(normalize(author))),
-    );
+  return {
+    all: () => [...mangas.values()],
+    findById: (id) => mangas.get(id) ?? null,
+    save: (manga) => {
+      const saved = { id: String(nextId++), ...manga };
+      mangas.set(saved.id, saved);
 
-  const findById = (id) => mangas.get(id) ?? null;
+      return saved;
+    },
+    update: (id, changes) => {
+      const manga = { ...mangas.get(id), ...changes };
+      mangas.set(id, manga);
 
-  const add = ({ title, author, genre, year, status = 'PLAN_TO_READ' }) => {
-    const duplicate = [...mangas.values()].find(
-      (manga) => normalize(manga.title) === normalize(title) && normalize(manga.author) === normalize(author),
-    );
-
-    if (duplicate) {
-      throw new GraphQLError(`Manga "${title}" by ${author} is already in the catalog`, {
-        extensions: { code: 'MANGA_ALREADY_EXISTS' },
-      });
-    }
-
-    if (!STATUSES.includes(status)) {
-      throw new GraphQLError(`Invalid status "${status}"`, { extensions: { code: 'INVALID_STATUS' } });
-    }
-
-    const manga = { id: String(nextId++), title, author, genre, year, status };
-    mangas.set(manga.id, manga);
-
-    return manga;
+      return manga;
+    },
   };
+};
 
-  const updateStatus = (id, status) => {
-    const manga = mangas.get(id);
+// O repositorio expoe os casos de uso ja ligados ao armazenamento. Os nomes
+// list/add/updateStatus continuam existindo como atalhos para os casos de uso
+// correspondentes, que e como o restante do projeto sempre chamou.
+export const createRepository = (seed = initialCatalog) => {
+  const store = createStore(seed);
+  const useCases = createUseCases(store);
 
-    if (!manga) {
-      throw new GraphQLError(`Manga with id "${id}" was not found`, { extensions: { code: 'MANGA_NOT_FOUND' } });
-    }
-
-    if (!STATUSES.includes(status)) {
-      throw new GraphQLError(`Invalid status "${status}"`, { extensions: { code: 'INVALID_STATUS' } });
-    }
-
-    manga.status = status;
-
-    return manga;
+  return {
+    ...useCases,
+    list: useCases.listMangas,
+    findById: useCases.findManga,
+    add: useCases.addManga,
+    updateStatus: useCases.updateMangaStatus,
   };
-
-  return { list, findById, add, updateStatus };
 };
